@@ -1,0 +1,202 @@
+import twitter
+import json
+import pandas as pd
+import numpy as np
+from textblob import TextBlob
+from textblob.sentiments import NaiveBayesAnalyzer
+from collections import Counter
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.lines import Line2D 
+import time
+import datetime
+import matplotlib.dates as dt
+import matplotlib.dates as mdates
+
+def removeurls(text, urls):
+    for url in urls:
+        text = text.replace(url,'')
+    return text
+
+CONSUMER_KEY = '70cJ4yveGmSBEnGFNGFEQBP18'
+CONSUMER_SECRET = 'ktjDkqpfjTCXzlsVxIlz6a8BFHWERar9DYkBsEkPHjqeuxoAIR'
+OAUTH_TOKEN = '3040045550-dVG9BREfMp6k2oLELEppUkxtrsncjsrF5xpleFI'
+OAUTH_TOKEN_SECRET = 'Pnzc1FXrWXUna7W9cLWcJlcIHTb1bt8ikdXLZgj5TKEk0'
+
+auth = twitter.oauth.OAuth(OAUTH_TOKEN, OAUTH_TOKEN_SECRET,
+                           CONSUMER_KEY, CONSUMER_SECRET)
+
+
+twitter_api = twitter.Twitter(auth=auth)
+print twitter_api
+
+q = 'bioshock infinite' 
+
+count = 100
+
+search_results = twitter_api.search.tweets(q=q, count=count)
+
+statuses = search_results['statuses']
+print json.dumps(statuses[0], indent=1)
+# Iterate through 5 more batches of results by following the cursor
+
+for _ in range(5):
+    print "Length of statuses", len(statuses)
+    try:
+        next_results = search_results['search_metadata']['next_results']
+    except KeyError, e: # No more results when next_results doesn't exist
+        break
+        
+    # Create a dictionary from next_results, which has the following form:
+    # ?max_id=313519052523986943&q=NCAA&include_entities=1
+    kwargs = dict([ kv.split('=') for kv in next_results[1:].split("&") ])
+    
+    search_results = twitter_api.search.tweets(**kwargs)
+    statuses += search_results['statuses']
+
+
+all_tweets = {'user':[], 'text':[], 'date':[],
+              'tweet_id':[],'retweet_count':[],
+              'urls':[] ,'text_nu':[]}
+ 
+for status in statuses:
+ 
+    all_tweets['user'] += [status['user']['screen_name']]
+    all_tweets['text'] += [status['text']]
+    all_tweets['date'] += [status['created_at']]
+    all_tweets['tweet_id']   += [status['id']]
+    all_tweets['retweet_count']   += [status['retweet_count']]
+    urls = [a['url'] for a in status['entities']['urls']]
+    all_tweets['urls']   +=   [urls]
+    all_tweets['text_nu'] += [removeurls(status['text'], urls)]
+
+
+print json.dumps(all_tweets['text_nu'][0:5], indent=1)
+
+pol = np.zeros(len(statuses))
+
+for i in range(0, len(statuses)):
+    blob = TextBlob(all_tweets['text_nu'][i], analyzer=NaiveBayesAnalyzer())
+    pol[i] = ( (blob.sentiment[1]-blob.sentiment[2]) )
+
+# Make the size of the plotting symbol depending on the retweet count
+s = np.array(all_tweets['retweet_count'])+5.
+# Extract the date
+date = []
+x = np.zeros(len(statuses))
+for i in range(0,len(statuses)):
+    d = datetime.datetime.strptime(all_tweets['date'][i],'%a %b %d %H:%M:%S +0000 %Y')
+    x[i] = dt.date2num(d) 
+    date.append(d)
+
+# Create a colormap
+customcmap = [(i/(1.1*len(statuses)),  i/(2.*len(statuses)), 0.05) for i in range(len(statuses))]
+fig = plt.figure()
+ax = fig.add_subplot(111)
+# Customize the axis to deal with dates
+plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%m/%d/%Y'))
+plt.gca().xaxis.set_major_locator(mdates.DayLocator())
+# Plot the polarity as a function of the date with a point size depending on the retweet count
+plt.scatter(date, pol, s=s, alpha=0.7, color=customcmap)
+# Zoom in
+ax.set_xlim([datetime.date(2015, 5, 26), datetime.date(2015, 5, 28)])
+plt.ylabel('Sentiment polarity on Bioshcok Infinite')
+plt.gcf().autofmt_xdate()
+
+plt.savefig('polaritytime2.png', bbox_inches='tight', dpi=300)
+
+data = {'polarity' : pd.Series(pol, index=all_tweets['user']), 
+        'retweet' : pd.Series(all_tweets['retweet_count'], index=all_tweets['user']),
+         'date': pd.Series(all_tweets['date'], index=all_tweets['user'])}
+ 
+df = pd.DataFrame(data)
+df = df.sort('date')
+print 'DATE'
+print np.min(df['date']), np.max(df['date'])
+
+fig = plt.figure(figsize=(16,12))
+ax = fig.add_subplot(111)
+# Set color transparency 
+a = 0.7
+# Create a colormap
+customcmap = [(x/(1.1*len(statuses)),  x/(2.*len(statuses)), 0.05) for x in range(len(statuses))]
+# Plot the 'polarity' column as horizontal bar plot
+df['polarity'].plot(kind='barh', ax=ax, alpha=a, legend=False, color=customcmap,
+                      edgecolor='w', xlim=(min(df['polarity']),max(df['polarity'])))
+# Remove grid lines (dotted lines inside plot)
+ax.grid(False)
+# Remove plot frame
+ax.set_frame_on(False)
+ax.lines[0].set_visible(False)
+ 
+# Customize title, set position, allow space on top of plot for title
+ax.set_title(ax.get_title(), fontsize=26, alpha=a, ha='center')
+plt.subplots_adjust(top=0.9)
+ax.title.set_position((0,1.08))
+ 
+# Set x axis label on top of plot, set label text
+ax.xaxis.set_label_position('top')
+xlab = 'Sentiment polarity on Bioshock Infinite'
+ax.set_xlabel(xlab, fontsize=20, alpha=a, ha='center')
+ax.xaxis.set_label_coords(0, 1.04)
+ 
+# Position x tick labels on top
+ax.xaxis.tick_top()
+# Remove tick lines in x and y axes
+ax.yaxis.set_ticks_position('none')
+ax.xaxis.set_ticks_position('none')
+
+# Customize y tick labels
+yticks = [item.get_text() for item in ax.get_yticklabels()]
+ax.set_yticklabels(yticks, fontsize=3, alpha=a)
+ax.yaxis.set_tick_params(pad=12)  
+
+# Set bar height dependent on the retweet count
+# Set min and max bar thickness (from 0 to 1)
+hmin, hmax = 0.3, 0.9
+xmin, xmax = np.min(df['retweet']), np.max(df['retweet'])
+print xmin, xmax
+# Function that interpolates linearly between hmin and hmax
+f = lambda x: hmin + (hmax-hmin)*(x-xmin)/(xmax-xmin)
+# Make array of heights
+hs = [f(x) for x in df['retweet']]
+ 
+# Iterate over bars
+for container in ax.containers:
+    # Each bar has a Rectangle element as child
+    for i,child in enumerate(container.get_children()):
+        # Reset the lower left point of each bar so that bar is centered
+        child.set_y(child.get_y()- 0.125 + 0.5-hs[i]/2)
+        # Attribute height to each Recatangle according to count
+        plt.setp(child, height=hs[i])
+
+# Legend
+# Create fake labels for legend
+l1 = Line2D([], [], linewidth=6, color='k', alpha=a) 
+l2 = Line2D([], [], linewidth=12, color='k', alpha=a) 
+l3 = Line2D([], [], linewidth=22, color='k', alpha=a)
+ 
+# Set three legend labels to be min, mean and max of the retweet count
+labels = [str(np.min(df['retweet'])), str(np.mean(df['retweet'])), str(np.max(df['retweet']))]
+print labels 
+# Position legend in lower right part
+# Set ncol=3 for horizontally expanding legend
+leg = ax.legend([l1, l2, l3], labels, ncol=3, frameon=False, fontsize=16, 
+                bbox_to_anchor=[1.1, 0.11], handlelength=2, 
+                handletextpad=1, columnspacing=2, title='Count')
+ 
+# Customize legend title
+# Set position to increase space between legend and labels
+plt.setp(leg.get_title(), fontsize=20, alpha=a)
+leg.get_title().set_position((0, 10))
+# Customize transparency for legend labels
+[plt.setp(label, alpha=a) for label in leg.get_texts()]
+
+plt.savefig('polarityhist.png', bbox_inches='tight', dpi=300)
+
+
+
+
+
+
